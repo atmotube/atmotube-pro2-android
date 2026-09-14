@@ -7,7 +7,10 @@ import com.atmotube.pro2.example.AtmotubeBleManager
 import io.runtime.mcumgr.managers.FsManager
 import io.runtime.mcumgr.transfer.StreamDownloadCallback
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.flow.filterNotNull
+import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.withContext
+import kotlinx.coroutines.withTimeoutOrNull
 import java.io.File
 import java.io.FileOutputStream
 import java.text.SimpleDateFormat
@@ -16,6 +19,9 @@ import java.util.Locale
 import kotlin.coroutines.resume
 import kotlin.coroutines.resumeWithException
 import kotlin.coroutines.suspendCoroutine
+
+private const val FOLDER_NEW = "h_new"
+private const val FOLDER_ACTIVE = "h_active"
 
 class HistoryManager(
     private val context: Context,
@@ -26,7 +32,19 @@ class HistoryManager(
         val transport = bleManager.getTransport() ?: return@withContext null
         val fsManager = FsManager(transport)
 
-        // 1. Get list of files
+        // The PM format flag must be known before the PM columns in each file can be decoded
+        // correctly; it's read back once per connection in AtmotubeBleManager.fetchFirmwareVersion.
+        // Fall back to the legacy format (rather than hang indefinitely) if that never resolves.
+        val isNewPmFormat = withTimeoutOrNull(3000) {
+            bleManager.isNewPmFormat.filterNotNull().first()
+        } ?: run {
+            Log.w("HistoryManager", "Firmware version unknown, assuming legacy PM format")
+            false
+        }
+
+        // 1. Get list of files. /h_new/ holds records not yet acknowledged by the device, /h_active/
+        // holds the currently open (still-being-written) file - both need to be read; /h_new files
+        // are also the ones the device expects a sync confirmation for (see step 4 below).
         val fileList = listFiles()
         if (fileList.isEmpty()) return@withContext null
 
@@ -37,11 +55,14 @@ class HistoryManager(
             try {
                 val file = downloadFile(fsManager, fileName)
                 // 3. Parse file
-                val measurements = file.inputStream().use { HistoryParser.parseStream(it) }
+                val measurements = file.inputStream().use { HistoryParser.parseStream(it, isNewPmFormat) }
                 allMeasurements.addAll(measurements)
 
-                // 4. Send sync confirmation (optional but good practice)
-                // bleManager.sendShellCommand("history sync $fileName")
+                // 4. Confirm the sync so the device can free/rotate this file - only for /h_new/;
+                // /h_active/ is still open on the device and isn't meant to be acknowledged.
+                if (fileName.contains(FOLDER_NEW)) {
+                    bleManager.sendShellCommand("history sync $fileName")
+                }
 
                 file.delete() // Clean up temp file
             } catch (e: Exception) {
@@ -64,8 +85,9 @@ class HistoryManager(
             if (response.ret == 0) {
                 val clean = response.o.replace("history get ", "").trim()
                 clean.split(";")
-                    .map { it.substringBefore(",") }
-                    .filter { it.isNotEmpty() && it.contains("h_active") }
+                    .map { it.substringBefore(",").trim() }
+                    .filter { it.isNotEmpty() && (it.contains(FOLDER_NEW) || it.contains(FOLDER_ACTIVE)) }
+                    .sortedBy { if (it.contains(FOLDER_NEW)) 0 else 1 }
             } else {
                 emptyList()
             }

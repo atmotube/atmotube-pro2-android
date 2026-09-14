@@ -3,10 +3,30 @@ package com.atmotube.pro2.example
 import java.io.InputStream
 import java.util.Date
 
+/**
+ * Firmware 3.0.17+ encodes PM values with bit 15 as a format flag (integer µg/m³ when set,
+ * legacy 0.1-precision fixed point when clear). Older firmware always uses the legacy format.
+ * Callers must pass the actual `isNewPmFormat` flag (see [AtmotubeBleManager.isNewPmFormat]) -
+ * assuming "always new" silently corrupts PM readings from devices on older firmware.
+ */
+fun checkFwNew(demandedMajor: Int, demandedMinor: Int, demandedPatch: Int, fw: String?): Boolean {
+    if (fw == null) return false
+    val components = fw.substringBefore("-").split(".")
+    val major = components.getOrNull(0)?.toIntOrNull() ?: 0
+    val minor = components.getOrNull(1)?.toIntOrNull() ?: 0
+    val patch = components.getOrNull(2)?.toIntOrNull() ?: 0
+
+    return when {
+        major != demandedMajor -> major > demandedMajor
+        minor != demandedMinor -> minor > demandedMinor
+        else -> patch >= demandedPatch
+    }
+}
+
 data class AtmotubeReading(
     val deviceMac: String,
     val timestamp: Date = Date(),
-    val temperature: Double,
+    val temperature: Double?,
     val humidity: Int,
     val pressure: Double,
     val vocIndex: Int,
@@ -28,7 +48,12 @@ data class AtmotubeReading(
         private const val PM_ENCODING_FLAG = 0x8000
         private const val PM_ENCODING_VALUE_MASK = 0x7FFF
 
-        fun decodePmValue(raw: Int): Double {
+        // The device's own invalid-temperature sentinel is 0x7FFF (not 0xFFFF - that value is
+        // never sent on the wire for temperature, only reused here as a display sentinel).
+        private const val TEMPERATURE_INVALID_RAW = 0x7FFF
+
+        fun decodePmValue(raw: Int, isNewPmFormat: Boolean): Double {
+            if (!isNewPmFormat) return raw.toDouble() / 10.0
             return if ((raw and PM_ENCODING_FLAG) != 0) {
                 // Bit 15 set → integer format
                 (raw and PM_ENCODING_VALUE_MASK).toDouble()
@@ -39,7 +64,12 @@ data class AtmotubeReading(
         }
 
         fun formatSensorValue(value: Number?, type: String = "generic"): String {
-            if (value == null) return ""
+            if (value == null) {
+                // For temp/hum/press, null means the device sent its invalid-reading sentinel (or
+                // the record was taken while charging); for everything else it means the packet
+                // simply didn't include that optional block.
+                return if (type == "temp" || type == "hum" || type == "press") "Off" else ""
+            }
             val v = value.toDouble()
 
             if (v in offValues) return "Off"
@@ -54,7 +84,7 @@ data class AtmotubeReading(
 
         fun fromBytes(data: ByteArray, deviceMac: String): AtmotubeReading {
             val temperatureRaw = ((data[1].toInt() and 0xFF) shl 8) or (data[0].toInt() and 0xFF)
-            val temperature = if (temperatureRaw == 0xFFFF) 65535.0 else temperatureRaw.toShort() / 100.0
+            val temperature = if (temperatureRaw == TEMPERATURE_INVALID_RAW) null else temperatureRaw.toShort() / 100.0
 
             val humidityRaw = data[2].toInt() and 0xFF
             val humidity = if (humidityRaw == 0xFF) -1 else humidityRaw
@@ -90,14 +120,96 @@ data class AtmotubeReading(
             )
         }
 
-        fun parsePm(data: ByteArray): Triple<Double, Double, Double> {
-            if (data.size < 6) return Triple(0.0, 0.0, 0.0)
+        /**
+         * Parses the PM live-notification characteristic. The device sends 16 bytes: PM1/2.5/10
+         * mass concentration (µg/m³), followed by PM0.5/1/2.5/10 particle counts (particles/cm³)
+         * and the typical particle size (µm) - all of which are dropped if you only read the
+         * first 6 bytes.
+         */
+        fun parsePm(data: ByteArray, isNewPmFormat: Boolean): AtmotubePmReading {
+            if (data.size < 16) {
+                return AtmotubePmReading(0.0, 0.0, 0.0, 0, 0, 0, 0, 0.0)
+            }
 
-            val pm1 = decodePmValue((data[1].toInt() and 0xFF) shl 8 or (data[0].toInt() and 0xFF))
-            val pm25 = decodePmValue((data[3].toInt() and 0xFF) shl 8 or (data[2].toInt() and 0xFF))
-            val pm10 = decodePmValue((data[5].toInt() and 0xFF) shl 8 or (data[4].toInt() and 0xFF))
+            fun readUShort(offset: Int): Int =
+                ((data[offset + 1].toInt() and 0xFF) shl 8 or (data[offset].toInt() and 0xFF))
 
-            return Triple(pm1, pm25, pm10)
+            val pm1 = decodePmValue(readUShort(0), isNewPmFormat)
+            val pm25 = decodePmValue(readUShort(2), isNewPmFormat)
+            val pm10 = decodePmValue(readUShort(4), isNewPmFormat)
+
+            val pm05Particles = readUShort(6)
+            val pm1Particles = readUShort(8)
+            val pm25Particles = readUShort(10)
+            val pm10Particles = readUShort(12)
+            val typicalParticleSize = readUShort(14) / 1000.0
+
+            return AtmotubePmReading(
+                pm1 = pm1,
+                pm25 = pm25,
+                pm10 = pm10,
+                pm05Particles = pm05Particles,
+                pm1Particles = pm1Particles,
+                pm25Particles = pm25Particles,
+                pm10Particles = pm10Particles,
+                typicalParticleSize = typicalParticleSize
+            )
+        }
+    }
+}
+
+data class AtmotubePmReading(
+    // µg/m³
+    val pm1: Double,
+    val pm25: Double,
+    val pm10: Double,
+    // particles/cm³
+    val pm05Particles: Int,
+    val pm1Particles: Int,
+    val pm25Particles: Int,
+    val pm10Particles: Int,
+    // µm
+    val typicalParticleSize: Double
+)
+
+/** Parses the GPS live-notification characteristic (18 bytes). */
+data class AtmotubeGpsReading(
+    val latitude: Double,
+    val longitude: Double,
+    val altitude: Short,
+    val satellitesFixed: Int,
+    val satellitesInView: Int,
+    val accuracy: Int
+) {
+    companion object {
+        fun fromBytes(data: ByteArray): AtmotubeGpsReading? {
+            if (data.size < 18) return null
+
+            fun readInt32(offset: Int): Int =
+                ((data[offset + 3].toInt() and 0xFF) shl 24) or
+                        ((data[offset + 2].toInt() and 0xFF) shl 16) or
+                        ((data[offset + 1].toInt() and 0xFF) shl 8) or
+                        (data[offset].toInt() and 0xFF)
+
+            fun readUShort(offset: Int): Int =
+                ((data[offset + 1].toInt() and 0xFF) shl 8) or (data[offset].toInt() and 0xFF)
+
+            val latitude = readInt32(0) / 1e6
+            val longitude = readInt32(4) / 1e6
+            // bytes 8..11 are GNSS SNR buckets, not used in this example
+            val altitude = readUShort(12).toShort()
+            val satellitesFixed = data[14].toInt() and 0xFF
+            val satellitesInView = data[15].toInt() and 0xFF
+            val accuracy = readUShort(16)
+
+            return AtmotubeGpsReading(
+                latitude = latitude,
+                longitude = longitude,
+                altitude = altitude,
+                satellitesFixed = satellitesFixed,
+                satellitesInView = satellitesInView,
+                accuracy = accuracy
+            )
         }
     }
 }
@@ -140,7 +252,10 @@ class HistoryParser {
         private const val GPS_BIT = 0b00010000
         private const val GPS_EXT_BIT = 0b00100000
 
-        fun parseStream(input: InputStream): List<HistoryMeasurement> {
+        private const val CHARGING_BIT = 1 shl 14
+        private const val RECENTLY_CHARGED_BIT = 1 shl 15
+
+        fun parseStream(input: InputStream, isNewPmFormat: Boolean): List<HistoryMeasurement> {
             val list = mutableListOf<HistoryMeasurement>()
             val reader = CrcReader(input)
 
@@ -157,9 +272,9 @@ class HistoryParser {
                 val batteryU8 = reader.readU8() ?: break
                 val status = reader.readLeU16() ?: break
 
-                val temp = if ((tempRaw.toInt() and 0xFFFF) == 0xFFFF) 65535.0 else tempRaw / 100.0
-                val hum = if (humidityU8 == 0xFF) -1 else humidityU8.toInt()
-                val pressure = pressure10 / 10.0
+                var temp: Double? = if ((tempRaw.toInt() and 0xFFFF) == 0x7FFF) null else tempRaw / 100.0
+                var hum: Int? = if (humidityU8 == 0xFF) null else humidityU8
+                val pressure = if (pressure10 == 0xFFFFFFFFL) null else pressure10 / 10.0
 
                 var vocIndex: Int? = null
                 var vocPpb: Int? = null
@@ -179,10 +294,9 @@ class HistoryParser {
                 var pm25: Double? = null
                 var pm10: Double? = null
                 if ((packetType and PM_BIT) != 0) {
-                    // Firmware 3.0.17+ rules
-                    pm1 = AtmotubeReading.decodePmValue(reader.readLeU16() ?: 0)
-                    pm25 = AtmotubeReading.decodePmValue(reader.readLeU16() ?: 0)
-                    pm10 = AtmotubeReading.decodePmValue(reader.readLeU16() ?: 0)
+                    pm1 = AtmotubeReading.decodePmValue(reader.readLeU16() ?: 0, isNewPmFormat)
+                    pm25 = AtmotubeReading.decodePmValue(reader.readLeU16() ?: 0, isNewPmFormat)
+                    pm10 = AtmotubeReading.decodePmValue(reader.readLeU16() ?: 0, isNewPmFormat)
                 }
 
                 var latitude: Double? = null
@@ -226,9 +340,20 @@ class HistoryParser {
                     if (accRaw != null) accuracy = accRaw / 100.0
                 }
 
-                reader.readCrcByte() // crc
+                val crcExpected = reader.readCrcByte() // final CRC byte, not fed into the running CRC
+                val crcValid = crcExpected != null && reader.crc() == crcExpected
 
-                val flags = parseFlags(status)
+                // While charging (or shortly after), the temperature/humidity sensor readings are
+                // unreliable due to self-heating - the device flags this in the status bits rather
+                // than omitting the fields, so consumers must null them out themselves.
+                val charging = (status and CHARGING_BIT) != 0
+                val recentlyCharged = (status and RECENTLY_CHARGED_BIT) != 0
+                if (charging || recentlyCharged) {
+                    temp = null
+                    hum = null
+                }
+
+                val flags = parseFlags(status) + if (!crcValid) listOf("CRC mismatch") else emptyList()
 
                 list.add(HistoryMeasurement(
                     timestamp = tsSeconds,
@@ -285,10 +410,29 @@ class HistoryParser {
         }
     }
 
+    /**
+     * Reads bytes from the history stream while feeding them into a running CRC-8 (poly 0x31,
+     * matching the device's firmware), so a caller can compare it against the trailing CRC byte
+     * (which is itself excluded from the running CRC).
+     */
     private class CrcReader(private val input: InputStream) {
+        private var crc: Int = 0x00
+
+        fun crc(): Int = crc and 0xFF
+
+        private fun feed(b: Int) {
+            var c = crc xor (b and 0xFF)
+            repeat(8) {
+                c = if ((c and 0x80) != 0) ((c shl 1) xor 0x31) and 0xFF else (c shl 1) and 0xFF
+            }
+            crc = c
+        }
+
         fun readU8(): Int? {
             val v = input.read()
-            return if (v == -1) null else v
+            if (v == -1) return null
+            feed(v)
+            return v
         }
 
         fun readLeU16(): Int? {
@@ -325,7 +469,9 @@ class HistoryParser {
                     (b3 shl 24)
         }
 
-        fun readCrcByte(): Int? = readU8()
+        fun readCrcByte(): Int? {
+            val v = input.read()
+            return if (v == -1) null else (v and 0xFF)
+        }
     }
 }
-

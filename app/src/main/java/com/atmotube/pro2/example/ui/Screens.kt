@@ -10,6 +10,8 @@ import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.unit.dp
+import com.atmotube.pro2.example.AtmotubeGpsReading
+import com.atmotube.pro2.example.AtmotubePmReading
 import com.atmotube.pro2.example.AtmotubeReading
 import com.atmotube.pro2.example.ConnectionState
 
@@ -59,7 +61,8 @@ fun ScanScreen(
 fun DeviceScreen(
     connectionState: ConnectionState,
     reading: AtmotubeReading?,
-    pmReading: Triple<Double, Double, Double>?,
+    pmReading: AtmotubePmReading?,
+    gpsReading: AtmotubeGpsReading?,
     commandLogs: List<String>,
     onSendCommand: (String) -> Unit,
     onDownloadHistory: () -> Unit,
@@ -93,13 +96,20 @@ fun DeviceScreen(
         }
 
         if (pmReading != null) {
-            Text("PM1: ${AtmotubeReading.formatSensorValue(pmReading.first)}")
-            Text("PM2.5: ${AtmotubeReading.formatSensorValue(pmReading.second)}")
-            Text("PM10: ${AtmotubeReading.formatSensorValue(pmReading.third)}")
+            Text("PM1: ${AtmotubeReading.formatSensorValue(pmReading.pm1)}")
+            Text("PM2.5: ${AtmotubeReading.formatSensorValue(pmReading.pm25)}")
+            Text("PM10: ${AtmotubeReading.formatSensorValue(pmReading.pm10)}")
+            Text("Particles (#/cm³) 0.5/1/2.5/10: ${pmReading.pm05Particles}/${pmReading.pm1Particles}/${pmReading.pm25Particles}/${pmReading.pm10Particles}")
+            Text("Typical particle size: ${pmReading.typicalParticleSize} µm")
         } else if (reading != null) {
             Text("PM1: ${AtmotubeReading.formatSensorValue(reading.pm1)}")
             Text("PM2.5: ${AtmotubeReading.formatSensorValue(reading.pm25)}")
             Text("PM10: ${AtmotubeReading.formatSensorValue(reading.pm10)}")
+        }
+
+        if (gpsReading != null) {
+            Text("GPS: ${gpsReading.latitude}, ${gpsReading.longitude} (alt ${gpsReading.altitude} m)")
+            Text("Satellites fixed/in view: ${gpsReading.satellitesFixed}/${gpsReading.satellitesInView}, accuracy ${gpsReading.accuracy}")
         }
 
         HorizontalDivider(modifier = Modifier.padding(vertical = 8.dp))
