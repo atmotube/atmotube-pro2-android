@@ -5,9 +5,6 @@ import android.bluetooth.BluetoothGatt
 import android.bluetooth.BluetoothGattCharacteristic
 import android.content.Context
 import android.util.Log
-import io.runtime.mcumgr.McuMgrTransport
-import io.runtime.mcumgr.ble.McuMgrBleTransport
-import io.runtime.mcumgr.managers.ShellManager
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.flow.MutableSharedFlow
@@ -19,6 +16,9 @@ import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.launch
 import no.nordicsemi.android.ble.BleManager
 import no.nordicsemi.android.ble.observer.ConnectionObserver
+import no.nordicsemi.android.mcumgr.McuMgrTransport
+import no.nordicsemi.android.mcumgr.ble.McuMgrBleTransport
+import no.nordicsemi.android.mcumgr.managers.ShellManager
 import java.util.UUID
 
 class AtmotubeBleManager(
@@ -216,7 +216,7 @@ class AtmotubeBleManager(
     private fun logCommand(msg: String) {
         val list = _commandLogs.value.toMutableList()
         list.add(0, msg) // Add to top
-        if (list.size > 50) list.removeLast()
+        if (list.size > 50) list.removeAt(list.lastIndex)
         _commandLogs.value = list
     }
 }

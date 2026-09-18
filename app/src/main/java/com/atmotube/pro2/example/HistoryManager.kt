@@ -3,14 +3,15 @@ package com.atmotube.pro2.example
 import android.content.Context
 import android.os.Environment
 import android.util.Log
-import com.atmotube.pro2.example.AtmotubeBleManager
-import io.runtime.mcumgr.managers.FsManager
-import io.runtime.mcumgr.transfer.StreamDownloadCallback
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.flow.filterNotNull
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.withContext
 import kotlinx.coroutines.withTimeoutOrNull
+import no.nordicsemi.android.mcumgr.exception.McuMgrException
+import no.nordicsemi.android.mcumgr.managers.FsManager
+import no.nordicsemi.android.mcumgr.managers.ShellManager
+import no.nordicsemi.android.mcumgr.transfer.StreamDownloadCallback
 import java.io.File
 import java.io.FileOutputStream
 import java.text.SimpleDateFormat
@@ -79,7 +80,7 @@ class HistoryManager(
 
     private suspend fun listFiles(): List<String> = withContext(Dispatchers.IO) {
         val transport = bleManager.getTransport() ?: return@withContext emptyList()
-        val shell = io.runtime.mcumgr.managers.ShellManager(transport)
+        val shell = ShellManager(transport)
         try {
             val response = shell.exec("history", arrayOf("get"))
             if (response.ret == 0) {
@@ -104,7 +105,7 @@ class HistoryManager(
             fsManager.fileDownload(remotePath, fos, object : StreamDownloadCallback {
                 override fun onDownloadProgressChanged(current: Int, total: Int, timestamp: Long) {}
 
-                override fun onDownloadFailed(error: io.runtime.mcumgr.exception.McuMgrException) {
+                override fun onDownloadFailed(error: McuMgrException) {
                     try {
                         fos.close()
                     } catch (e: Exception) {
