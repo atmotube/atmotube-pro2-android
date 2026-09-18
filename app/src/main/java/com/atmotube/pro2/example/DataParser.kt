@@ -36,8 +36,13 @@ data class AtmotubeReading(
     val pm1: Double,
     val pm25: Double,
     val pm10: Double,
-    val batteryLevel: Int
+    val batteryLevel: Int,
+    val errorFlags: Int
 ) {
+    val errorDescriptions: List<String>
+        get() = HistoryParser.parseFlags(errorFlags)
+
+
     companion object {
         val offValues: Set<Double> = setOf(0xFFFF.toDouble(), 0xFFFF.toDouble() / 10.0, 0x7FFF.toDouble())
         val heatingValues: Set<Double> = setOf(0xFFFE.toDouble(), 0xFFFE.toDouble() / 10.0, 0x7FFE.toDouble())
@@ -103,6 +108,9 @@ data class AtmotubeReading(
             val noxIndex = readUShort(11)
             val co2Ppm = readUShort(13)
             val batteryLevel = data[15].toInt() and 0xFF
+            // Bytes 16..17 (error/status flags) are only present on firmware that sends the full
+            // 18-byte packet; older packets are still handled by defaulting to "no errors known".
+            val errorFlags = if (data.size >= 18) readUShort(16) else 0
 
             return AtmotubeReading(
                 deviceMac = deviceMac,
@@ -116,7 +124,8 @@ data class AtmotubeReading(
                 pm1 = 0.0,
                 pm25 = 0.0,
                 pm10 = 0.0,
-                batteryLevel = batteryLevel
+                batteryLevel = batteryLevel,
+                errorFlags = errorFlags
             )
         }
 
@@ -142,7 +151,7 @@ data class AtmotubeReading(
             val pm1Particles = readUShort(8)
             val pm25Particles = readUShort(10)
             val pm10Particles = readUShort(12)
-            val typicalParticleSize = readUShort(14) / 1000.0
+            val typicalParticleSize = readUShort(14) / 10.0
 
             return AtmotubePmReading(
                 pm1 = pm1,
@@ -172,18 +181,19 @@ data class AtmotubePmReading(
     val typicalParticleSize: Double
 )
 
-/** Parses the GPS live-notification characteristic (18 bytes). */
+/** Parses the GPS live-notification characteristic (19 bytes). */
 data class AtmotubeGpsReading(
     val latitude: Double,
     val longitude: Double,
     val altitude: Short,
     val satellitesFixed: Int,
     val satellitesInView: Int,
-    val accuracy: Int
+    val accuracy: Int,
+    val isOn: Boolean
 ) {
     companion object {
         fun fromBytes(data: ByteArray): AtmotubeGpsReading? {
-            if (data.size < 18) return null
+            if (data.size < 19) return null
 
             fun readInt32(offset: Int): Int =
                 ((data[offset + 3].toInt() and 0xFF) shl 24) or
@@ -201,6 +211,7 @@ data class AtmotubeGpsReading(
             val satellitesFixed = data[14].toInt() and 0xFF
             val satellitesInView = data[15].toInt() and 0xFF
             val accuracy = readUShort(16)
+            val isOn = (data[18].toInt() and 0xFF) != 0
 
             return AtmotubeGpsReading(
                 latitude = latitude,
@@ -208,7 +219,8 @@ data class AtmotubeGpsReading(
                 altitude = altitude,
                 satellitesFixed = satellitesFixed,
                 satellitesInView = satellitesInView,
-                accuracy = accuracy
+                accuracy = accuracy,
+                isOn = isOn
             )
         }
     }
@@ -322,7 +334,7 @@ class HistoryParser {
                     pm10Particles = reader.readLeU16()
                     val tpsRaw = reader.readLeU16()
                     if (tpsRaw != null) {
-                        typicalParticleSize = tpsRaw / 1000.0
+                        typicalParticleSize = tpsRaw / 10.0
                     }
                 }
 
@@ -386,7 +398,7 @@ class HistoryParser {
             return list
         }
 
-        private fun parseFlags(status: Int): List<String> {
+        fun parseFlags(status: Int): List<String> {
             val descriptions = mapOf(
                 0 to "PM sensor error",
                 1 to "PM laser error",

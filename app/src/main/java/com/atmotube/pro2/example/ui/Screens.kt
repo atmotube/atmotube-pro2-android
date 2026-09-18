@@ -93,6 +93,9 @@ fun DeviceScreen(
             Text("Temp: ${AtmotubeReading.formatSensorValue(reading.temperature, "temp")}°C")
             Text("Humidity: ${AtmotubeReading.formatSensorValue(reading.humidity, "hum")}%")
             Text("Pressure: ${AtmotubeReading.formatSensorValue(reading.pressure, "press")} hPa")
+            if (reading.errorDescriptions.isNotEmpty()) {
+                Text("Flags: ${reading.errorDescriptions.joinToString(", ")}")
+            }
         }
 
         if (pmReading != null) {
@@ -108,6 +111,7 @@ fun DeviceScreen(
         }
 
         if (gpsReading != null) {
+            Text("GPS: ${if (gpsReading.isOn) "on" else "off"}")
             Text("GPS: ${gpsReading.latitude}, ${gpsReading.longitude} (alt ${gpsReading.altitude} m)")
             Text("Satellites fixed/in view: ${gpsReading.satellitesFixed}/${gpsReading.satellitesInView}, accuracy ${gpsReading.accuracy}")
         }
