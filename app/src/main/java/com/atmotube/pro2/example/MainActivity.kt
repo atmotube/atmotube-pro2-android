@@ -87,6 +87,7 @@ class MainActivity : ComponentActivity() {
                     val connectionState by bleManager.connectionState.collectAsState()
                     val reading by bleManager.latestReading.collectAsState()
                     val pmReading by bleManager.pmReading.collectAsState()
+                    val gpsReading by bleManager.gpsReading.collectAsState()
                     val logs by bleManager.commandLogs.collectAsState()
 
                     LaunchedEffect(connectionState) {
@@ -97,6 +98,15 @@ class MainActivity : ComponentActivity() {
                             // Optional: Go back to scan on disconnect?
                             // For now let's stay or provide a way to go back.
                             // currentScreen = Screen.SCAN
+                        }
+                    }
+
+                    // The device pushes this notification whenever it has newly rotated history
+                    // data waiting; without reacting to it, the user only ever sees history they
+                    // manually pull with the "Download History" button below.
+                    LaunchedEffect(bleManager) {
+                        bleManager.historyReady.collect {
+                            if (!isDownloadingHistory) downloadHistory()
                         }
                     }
 
@@ -117,6 +127,7 @@ class MainActivity : ComponentActivity() {
                                 connectionState = connectionState,
                                 reading = reading,
                                 pmReading = pmReading,
+                                gpsReading = gpsReading,
                                 commandLogs = logs,
                                 onSendCommand = { cmd -> bleManager.sendShellCommand(cmd) },
                                 onDownloadHistory = { downloadHistory() },
