@@ -103,7 +103,7 @@ fun DeviceScreen(
             Text("PM2.5: ${AtmotubeReading.formatSensorValue(pmReading.pm25)}")
             Text("PM10: ${AtmotubeReading.formatSensorValue(pmReading.pm10)}")
             Text("Particles (#/cm³) 0.5/1/2.5/10: ${pmReading.pm05Particles}/${pmReading.pm1Particles}/${pmReading.pm25Particles}/${pmReading.pm10Particles}")
-            Text("Typical particle size (raw sensor units): ${pmReading.typicalParticleSize}")
+            Text("Typical particle size: ${pmReading.typicalParticleSize} µm")
         } else if (reading != null) {
             Text("PM1: ${AtmotubeReading.formatSensorValue(reading.pm1)}")
             Text("PM2.5: ${AtmotubeReading.formatSensorValue(reading.pm25)}")
