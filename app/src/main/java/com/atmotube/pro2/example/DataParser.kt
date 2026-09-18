@@ -132,12 +132,12 @@ data class AtmotubeReading(
         /**
          * Parses the PM live-notification characteristic. The device sends 16 bytes: PM1/2.5/10
          * mass concentration (µg/m³), followed by PM0.5/1/2.5/10 particle counts (particles/cm³)
-         * and the typical particle size (µm) - all of which are dropped if you only read the
-         * first 6 bytes.
+         * and the typical particle size - all of which are dropped if you only read the first 6
+         * bytes.
          */
         fun parsePm(data: ByteArray, isNewPmFormat: Boolean): AtmotubePmReading {
             if (data.size < 16) {
-                return AtmotubePmReading(0.0, 0.0, 0.0, 0, 0, 0, 0, 0.0)
+                return AtmotubePmReading(0.0, 0.0, 0.0, 0, 0, 0, 0, 0)
             }
 
             fun readUShort(offset: Int): Int =
@@ -151,7 +151,7 @@ data class AtmotubeReading(
             val pm1Particles = readUShort(8)
             val pm25Particles = readUShort(10)
             val pm10Particles = readUShort(12)
-            val typicalParticleSize = readUShort(14) / 10.0
+            val typicalParticleSize = readUShort(14)
 
             return AtmotubePmReading(
                 pm1 = pm1,
@@ -177,23 +177,28 @@ data class AtmotubePmReading(
     val pm1Particles: Int,
     val pm25Particles: Int,
     val pm10Particles: Int,
-    // µm
-    val typicalParticleSize: Double
+    // Raw sensor units - the main app's own code is inconsistent about whether this is µm or nm
+    // (compare AtmotubePmLiveReading's "µm" comment against the "typical_particle_nm" DB column),
+    // and never actually scales it, so it's left unscaled here too rather than guessing.
+    val typicalParticleSize: Int
 )
 
-/** Parses the GPS live-notification characteristic (19 bytes). */
+/**
+ * Parses the GPS live-notification characteristic. The SRS documents an extra "GPS status"
+ * byte at offset 18 (19 bytes total), but the main app's own parser only requires and reads the
+ * first 18 bytes - that byte is left unparsed there, so this mirrors that rather than the doc.
+ */
 data class AtmotubeGpsReading(
     val latitude: Double,
     val longitude: Double,
     val altitude: Short,
     val satellitesFixed: Int,
     val satellitesInView: Int,
-    val accuracy: Int,
-    val isOn: Boolean
+    val accuracy: Int
 ) {
     companion object {
         fun fromBytes(data: ByteArray): AtmotubeGpsReading? {
-            if (data.size < 19) return null
+            if (data.size < 18) return null
 
             fun readInt32(offset: Int): Int =
                 ((data[offset + 3].toInt() and 0xFF) shl 24) or
@@ -211,7 +216,6 @@ data class AtmotubeGpsReading(
             val satellitesFixed = data[14].toInt() and 0xFF
             val satellitesInView = data[15].toInt() and 0xFF
             val accuracy = readUShort(16)
-            val isOn = (data[18].toInt() and 0xFF) != 0
 
             return AtmotubeGpsReading(
                 latitude = latitude,
@@ -219,8 +223,7 @@ data class AtmotubeGpsReading(
                 altitude = altitude,
                 satellitesFixed = satellitesFixed,
                 satellitesInView = satellitesInView,
-                accuracy = accuracy,
-                isOn = isOn
+                accuracy = accuracy
             )
         }
     }
@@ -247,7 +250,7 @@ data class HistoryMeasurement(
     val pm1Particles: Int?,
     val pm25Particles: Int?,
     val pm10Particles: Int?,
-    val typicalParticleSize: Double?,
+    val typicalParticleSize: Int?,
     val altitude: Double?,
     val satellitesFixed: Int?,
     val satellitesView: Int?,
@@ -326,16 +329,14 @@ class HistoryParser {
                 var pm1Particles: Int? = null
                 var pm25Particles: Int? = null
                 var pm10Particles: Int? = null
-                var typicalParticleSize: Double? = null
+                var typicalParticleSize: Int? = null
                 if ((packetType and PM_EXT_BIT) != 0) {
                     pm05Particles = reader.readLeU16()
                     pm1Particles = reader.readLeU16()
                     pm25Particles = reader.readLeU16()
                     pm10Particles = reader.readLeU16()
-                    val tpsRaw = reader.readLeU16()
-                    if (tpsRaw != null) {
-                        typicalParticleSize = tpsRaw / 10.0
-                    }
+                    // Left unscaled - see the AtmotubePmReading.typicalParticleSize comment.
+                    typicalParticleSize = reader.readLeU16()
                 }
 
                 var altitude: Double? = null

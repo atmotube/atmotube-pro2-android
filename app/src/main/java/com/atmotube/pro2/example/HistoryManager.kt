@@ -133,7 +133,7 @@ class HistoryManager(
     private fun exportToCsv(measurements: List<HistoryMeasurement>): File {
         val file = File(context.getExternalFilesDir(Environment.DIRECTORY_DOCUMENTS), "atmotube_history_${System.currentTimeMillis()}.csv")
         file.bufferedWriter().use { writer ->
-            writer.append("Timestamp,Date,Temperature,Humidity,Pressure,Battery,Status,Flags,VOC Index,VOC ppb,NOx Index,CO2 ppm,PM1,PM2.5,PM10,Lat,Lon,PM0.5 (#),PM1 (#),PM2.5 (#),PM10 (#),Typical Particle (µm),Alt,Sat Fixed,Sat View,Accuracy\n")
+            writer.append("Timestamp,Date,Temperature,Humidity,Pressure,Battery,Status,Flags,VOC Index,VOC ppb,NOx Index,CO2 ppm,PM1,PM2.5,PM10,Lat,Lon,PM0.5 (#),PM1 (#),PM2.5 (#),PM10 (#),Typical Particle (raw),Alt,Sat Fixed,Sat View,Accuracy\n")
             val sdf = SimpleDateFormat("yyyy-MM-dd HH:mm:ss", Locale.US)
 
             for (m in measurements) {
